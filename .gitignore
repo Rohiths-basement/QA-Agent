@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.qa/
+playwright/.auth/
+artifacts/
+data/wiki/
+data/runs/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

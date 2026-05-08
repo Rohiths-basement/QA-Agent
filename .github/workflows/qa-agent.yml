@@ -1,0 +1,50 @@
+name: QA Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_steps:
+        description: "Maximum agent steps"
+        required: false
+        default: "80"
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  qa-run:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Run QA agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          UNIFIED_QA_EMAIL: ${{ secrets.UNIFIED_QA_EMAIL }}
+          UNIFIED_QA_PASSWORD: ${{ secrets.UNIFIED_QA_PASSWORD }}
+          OPENAI_VECTOR_STORE_ID: ${{ secrets.OPENAI_VECTOR_STORE_ID }}
+        run: node dist/src/cli.js run --base-url https://sso.unified-apps.com/login --max-steps "${{ github.event.inputs.max_steps }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-agent-artifacts
+          path: artifacts/runs/

@@ -1,0 +1,250 @@
+export type PageType =
+  | "dashboard"
+  | "list"
+  | "detail"
+  | "form"
+  | "settings"
+  | "modal"
+  | "wizard"
+  | "report"
+  | "auth"
+  | "error"
+  | "empty"
+  | "unknown";
+
+export type RouteStatus =
+  | "discovered"
+  | "queued"
+  | "visited"
+  | "validated"
+  | "failed"
+  | "blocked"
+  | "skipped";
+
+export type ActionKind =
+  | "navigate"
+  | "click"
+  | "fill"
+  | "submit"
+  | "search"
+  | "filter"
+  | "sort"
+  | "open_detail"
+  | "create"
+  | "edit"
+  | "delete"
+  | "export"
+  | "import"
+  | "cancel"
+  | "logout"
+  | "noop";
+
+export type ActionRisk = "safe" | "mutation" | "destructive" | "tenant_wide" | "external";
+
+export type SafetyDecision = "allow" | "approval_required" | "deny";
+
+export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
+
+export type FindingCategory =
+  | "functional_bug"
+  | "workflow_mismatch"
+  | "wiki_product_mismatch"
+  | "copy_text_issue"
+  | "layout_display_issue"
+  | "accessibility_issue"
+  | "validation_issue"
+  | "broken_navigation"
+  | "auth_permission_issue"
+  | "console_runtime_error"
+  | "network_api_failure"
+  | "data_persistence_issue"
+  | "flaky_timeout_issue";
+
+export interface ArticleRecord {
+  id: string;
+  url: string;
+  title: string;
+  product?: string;
+  category?: string;
+  headings: string[];
+  bodyText: string;
+  markdown: string;
+  workflowSteps: string[];
+  terminology: string[];
+  contentHash: string;
+  crawledAt: string;
+  updatedAt?: string;
+  filePath?: string;
+}
+
+export interface WikiManifest {
+  rootUrl: string;
+  crawledAt: string;
+  articleCount: number;
+  jsonlPath: string;
+  markdownDir: string;
+  articles: Array<Pick<ArticleRecord, "id" | "url" | "title" | "product" | "category" | "contentHash" | "filePath">>;
+}
+
+export interface RetrievedChunk {
+  articleId: string;
+  title: string;
+  url: string;
+  text: string;
+  score: number;
+  product?: string;
+  category?: string;
+}
+
+export interface ControlDescriptor {
+  tag: string;
+  role?: string;
+  type?: string;
+  label: string;
+  name?: string;
+  href?: string;
+  selectorHint?: string;
+  disabled: boolean;
+  visible: boolean;
+}
+
+export interface FormDescriptor {
+  selectorHint: string;
+  labels: string[];
+  inputs: ControlDescriptor[];
+  buttons: ControlDescriptor[];
+}
+
+export interface TableDescriptor {
+  selectorHint: string;
+  headers: string[];
+  rowCount: number;
+}
+
+export interface NetworkEvent {
+  url: string;
+  method: string;
+  status?: number;
+  failureText?: string;
+  resourceType?: string;
+}
+
+export interface ConsoleEvent {
+  type: string;
+  text: string;
+}
+
+export interface ScreenState {
+  runId: string;
+  url: string;
+  routeKey: string;
+  title: string;
+  pageType: PageType;
+  visibleText: string;
+  textHash: string;
+  controls: ControlDescriptor[];
+  forms: FormDescriptor[];
+  tables: TableDescriptor[];
+  breadcrumbs: string[];
+  accessibilitySnapshot?: unknown;
+  screenshotPath?: string;
+  domSnapshotPath?: string;
+  consoleEvents: ConsoleEvent[];
+  networkEvents: NetworkEvent[];
+  capturedAt: string;
+}
+
+export interface CandidateAction {
+  id: string;
+  kind: ActionKind;
+  label: string;
+  description: string;
+  risk: ActionRisk;
+  selectorHint?: string;
+  href?: string;
+  inputValue?: string;
+  expectedResult: string;
+  cleanupRequired: boolean;
+  approvalRequired: boolean;
+  source: "deterministic" | "stagehand" | "planner";
+}
+
+export interface PolicyDecision {
+  decision: SafetyDecision;
+  reason: string;
+  action: CandidateAction;
+}
+
+export interface OracleJudgment {
+  summary: string;
+  expectedBehaviors: string[];
+  mismatches: Array<{
+    category: FindingCategory;
+    severity: FindingSeverity;
+    title: string;
+    expected: string;
+    actual: string;
+    citationUrls: string[];
+  }>;
+  citations: Array<{
+    title: string;
+    url: string;
+  }>;
+}
+
+export interface Finding {
+  id: string;
+  runId: string;
+  severity: FindingSeverity;
+  category: FindingCategory;
+  title: string;
+  route: string;
+  tenant: string;
+  role: string;
+  steps: string[];
+  expected: string;
+  actual: string;
+  screenshotPath?: string;
+  tracePath?: string;
+  consoleEvidence: ConsoleEvent[];
+  networkEvidence: NetworkEvent[];
+  citationUrls: string[];
+  createdAt: string;
+}
+
+export interface TenantCredentialProfile {
+  tenant: string;
+  role: string;
+  email: string;
+  password: string;
+}
+
+export interface AgentConfig {
+  baseUrl: string;
+  wikiUrl: string;
+  runId?: string;
+  resumeRunId?: string;
+  tenant: string;
+  role: string;
+  maxSteps: number;
+  headless: boolean;
+  useStagehand: boolean;
+  approvalMode: "block" | "allow_destructive";
+  vectorStoreId?: string;
+  wikiJsonlPath?: string;
+  model: string;
+  storagePath: string;
+  artifactDir: string;
+  credentialsFile?: string;
+}
+
+export interface RunSummary {
+  runId: string;
+  status: "running" | "completed" | "failed" | "incomplete";
+  startedAt: string;
+  completedAt?: string;
+  routesVisited: number;
+  routesQueued: number;
+  actionsAttempted: number;
+  findings: number;
+}

@@ -1,0 +1,37 @@
+{
+  "name": "unified-production-qa-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Production QA agent for Unified apps with wiki-backed oracle, Playwright runtime, Stagehand integration, and resumable coverage memory.",
+  "bin": {
+    "unified-qa": "./dist/src/cli.js",
+    "qa": "./dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test test/**/*.test.ts",
+    "qa:ingest": "tsx src/cli.ts ingest-wiki --url https://wiki.unified-apps.com/",
+    "qa:run": "tsx src/cli.ts run --base-url https://sso.unified-apps.com/login",
+    "qa:report": "tsx src/cli.ts report"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "^2.5.8",
+    "cheerio": "^1.1.2",
+    "dotenv": "^16.4.5",
+    "openai": "^6.8.0",
+    "playwright": "^1.57.0",
+    "turndown": "^7.2.1",
+    "zod": "3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/turndown": "^5.0.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
