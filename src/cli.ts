@@ -62,7 +62,8 @@ async function uploadKb(argv: string[]): Promise<void> {
       manifest: { type: "string", short: "m", default: "data/wiki/manifest.json" },
       "vector-store-id": { type: "string" },
       "vector-store-name": { type: "string" },
-      "batch-size": { type: "string" }
+      "batch-size": { type: "string" },
+      consolidated: { type: "boolean" }
     }
   });
   const { uploadWikiToOpenAiVectorStore } = await import("./knowledge/openaiVectorStore.js");
@@ -72,7 +73,8 @@ async function uploadKb(argv: string[]): Promise<void> {
     manifestPath: stringOption(values.manifest) ?? "data/wiki/manifest.json",
     ...(vectorStoreId ? { vectorStoreId } : {}),
     ...(vectorStoreName ? { vectorStoreName } : {}),
-    ...(values["batch-size"] ? { batchSize: Number(values["batch-size"]) } : {})
+    ...(values["batch-size"] ? { batchSize: Number(values["batch-size"]) } : {}),
+    ...(values.consolidated ? { consolidated: true } : {})
   });
   console.log(`Vector store: ${result.vectorStoreId}`);
   console.log(`Uploaded files: ${result.uploadedFiles}`);
@@ -143,7 +145,7 @@ function printHelp(): void {
 
 Commands:
   ingest-wiki --url https://wiki.unified-apps.com/ [--out data/wiki]
-  upload-kb --manifest data/wiki/manifest.json [--vector-store-id vs_...]
+  upload-kb --manifest data/wiki/manifest.json [--vector-store-id vs_...] [--consolidated]
   run --base-url https://sso.unified-apps.com/login [--stagehand] [--resume <runId>]
   report --run-id <runId>
 
@@ -152,6 +154,7 @@ Common run options:
   --max-steps 1000
   --wiki-jsonl data/wiki/articles.jsonl
   --vector-store-id <id>
+  --model openai/gpt-5.1-chat
   --headed
   --allow-destructive
 `);

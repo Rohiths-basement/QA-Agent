@@ -29,7 +29,7 @@ export function readAgentConfig(options: CliOptions): AgentConfig {
     approvalMode: booleanOption(options["allow-destructive"]) ? "allow_destructive" : "block",
     ...optional("vectorStoreId", stringOption(options["vector-store-id"]) ?? process.env.OPENAI_VECTOR_STORE_ID),
     ...optional("wikiJsonlPath", stringOption(options["wiki-jsonl"]) ?? process.env.QA_WIKI_JSONL ?? "data/wiki/articles.jsonl"),
-    model: stringOption(options.model) ?? process.env.QA_ORACLE_MODEL ?? "gpt-5",
+    model: stringOption(options.model) ?? process.env.QA_ORACLE_MODEL ?? process.env.OPENROUTER_ORACLE_LIGHT_MODEL ?? "openai/gpt-5.1-chat",
     storagePath,
     artifactDir,
     ...optional("credentialsFile", stringOption(options["credentials-file"]) ?? process.env.QA_CREDENTIALS_FILE)

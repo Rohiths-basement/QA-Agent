@@ -285,7 +285,7 @@ export class BrowserRuntime {
         ...(env === "BROWSERBASE" && process.env.BROWSERBASE_API_KEY ? { apiKey: process.env.BROWSERBASE_API_KEY } : {}),
         ...(env === "BROWSERBASE" && process.env.BROWSERBASE_PROJECT_ID ? { projectId: process.env.BROWSERBASE_PROJECT_ID } : {}),
         modelName: stagehandModelName(),
-        ...(process.env.OPENAI_API_KEY ? { modelClientOptions: { apiKey: process.env.OPENAI_API_KEY } } : {}),
+        ...optionalStagehandModelClientOptions(),
         verbose: 1,
         domSettleTimeoutMs: 10_000,
         enableCaching: true,
@@ -593,5 +593,20 @@ function stagehandEnv(): "LOCAL" | "BROWSERBASE" {
 }
 
 function stagehandModelName(): string {
-  return process.env.STAGEHAND_MODEL_NAME ?? process.env.STAGEHAND_MODEL ?? "openai/gpt-4.1-mini";
+  if (process.env.STAGEHAND_MODEL_NAME) return process.env.STAGEHAND_MODEL_NAME;
+  if (process.env.STAGEHAND_MODEL) return process.env.STAGEHAND_MODEL;
+  return process.env.OPENROUTER_API_KEY ? "openai/openai/gpt-5.1-chat" : "openai/gpt-4.1-mini";
+}
+
+function optionalStagehandModelClientOptions(): Record<string, unknown> {
+  if (process.env.OPENROUTER_API_KEY) {
+    return {
+      modelClientOptions: {
+        apiKey: process.env.OPENROUTER_API_KEY,
+        baseURL: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"
+      }
+    };
+  }
+  if (process.env.OPENAI_API_KEY) return { modelClientOptions: { apiKey: process.env.OPENAI_API_KEY } };
+  return {};
 }

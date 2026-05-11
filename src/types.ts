@@ -190,6 +190,16 @@ export interface OracleJudgment {
     title: string;
     url: string;
   }>;
+  modelProvider?: "openrouter" | "heuristic";
+  model?: string;
+  retrievalMode?: "local" | "openai_vector_store" | "local_plus_openai_vector_store" | "none";
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    estimatedCostUsd: number;
+    accumulatedCostUsd: number;
+    budgetUsd: number;
+  };
 }
 
 export interface Finding {

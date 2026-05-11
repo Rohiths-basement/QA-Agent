@@ -39,6 +39,7 @@ jobs:
       - name: Run QA agent
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           UNIFIED_QA_EMAIL: ${{ secrets.UNIFIED_QA_EMAIL }}
           UNIFIED_QA_PASSWORD: ${{ secrets.UNIFIED_QA_PASSWORD }}
           OPENAI_VECTOR_STORE_ID: ${{ secrets.OPENAI_VECTOR_STORE_ID }}

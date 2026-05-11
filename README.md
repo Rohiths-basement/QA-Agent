@@ -11,7 +11,7 @@ observe page -> classify page -> retrieve wiki context -> infer actions -> choos
 The agent can run in two modes:
 
 - **Fallback mode:** Playwright-only runtime, local keyword retrieval over `data/wiki/articles.jsonl`, screenshots, traces, console/network capture, reports, route graph memory, and safety policies. No `OPENAI_API_KEY` is required.
-- **AI mode:** everything in fallback mode plus OpenAI vector-store file search, OpenAI model-backed oracle validation, and optional Stagehand AI browser observation/actions.
+- **AI mode:** everything in fallback mode plus OpenAI vector-store search for wiki retrieval, OpenRouter model-backed oracle validation, and optional Stagehand AI browser observation/actions routed through OpenRouter.
 
 ## Data Flow
 
@@ -41,8 +41,8 @@ flowchart TD
   QueryBuilder --> LocalKB
   QueryBuilder --> Oracle["Oracle client"]
   LocalKB --> Oracle
-  OpenAIVS -. file_search .-> Oracle
-  OpenAIModel["OpenAI model"] -. Responses API .-> Oracle
+  OpenAIVS -. vector search .-> Oracle
+  OpenRouterModel["OpenRouter model"] -. Chat Completions .-> Oracle
 
   Oracle --> Validator["Validator"]
   Classifier --> Planner["Planner"]
@@ -99,7 +99,8 @@ flowchart LR
 
   subgraph External["External Services"]
     UnifiedApp["Unified app"]
-    OpenAI["OpenAI model + vector store"]
+    OpenAI["OpenAI vector store"]
+    OpenRouter["OpenRouter models"]
     Browserbase["Browserbase optional future runtime"]
   end
 
@@ -111,6 +112,7 @@ flowchart LR
   VectorUpload --> OpenAI
   LocalSearch --> OracleClient
   OracleClient --> OpenAI
+  OracleClient --> OpenRouter
   Planner --> SafePolicy
   SafePolicy --> BrowserRuntime
   BrowserRuntime --> PlaywrightRuntime
@@ -130,15 +132,20 @@ flowchart LR
   BrowserRuntime -. later .-> Browserbase
 ```
 
-## Why OpenAI Is Used
+## Why OpenAI And OpenRouter Are Used
 
-`OPENAI_API_KEY` enables three separate capabilities:
+`OPENAI_API_KEY` is used only for knowledge retrieval:
 
 - **Vector-store upload:** `upload-kb` creates or updates an OpenAI vector store from crawled wiki records.
-- **Model-backed oracle:** `run` calls the OpenAI Responses API with the `file_search` tool so the model can compare the current screen against wiki evidence and return structured QA judgments.
-- **Stagehand AI browser layer:** `--stagehand` uses a model for `page.observe()` and guarded `page.act()` on unfamiliar UI.
+- **Vector-store search:** `run` queries that vector store for relevant wiki chunks per screen.
 
-Without `OPENAI_API_KEY`, the agent still runs. It skips OpenAI vector search/model validation and Stagehand AI calls, then uses Playwright plus local keyword retrieval and heuristic validation.
+`OPENROUTER_API_KEY` is used for reasoning/model work:
+
+- **Model-backed oracle:** the oracle sends local + OpenAI-vector retrieved wiki context to OpenRouter Chat Completions and asks for structured QA judgments.
+- **Stagehand AI browser layer:** when `--stagehand` is enabled, Stagehand can route model calls through OpenRouter's OpenAI-compatible API.
+- **Budget control:** `OPENROUTER_MAX_RUN_COST_USD` caps estimated oracle spend for a run.
+
+Without `OPENAI_API_KEY`, the agent still runs with local keyword retrieval. Without `OPENROUTER_API_KEY`, the agent still runs with heuristic oracle validation.
 
 ## Repository Layout
 
@@ -199,11 +206,19 @@ UNIFIED_QA_ROLE=admin
 | `QA_STORAGE_PATH` | No | `.qa/qa-agent.sqlite` | SQLite memory path. |
 | `QA_ARTIFACT_DIR` | No | `artifacts/runs` | Screenshots, traces, DOM snapshots, and reports. |
 | `QA_SAFETY_STEP_LIMIT` | No | `1000` | Safety ceiling for one run. |
-| `OPENAI_API_KEY` | AI mode only | none | Enables OpenAI vector store upload, model oracle, and Stagehand model calls. |
-| `OPENAI_VECTOR_STORE_ID` | AI oracle mode | none | Vector store containing uploaded wiki records. |
-| `QA_ORACLE_MODEL` | No | `gpt-5` | Model used by the OpenAI-backed QA oracle. |
+| `OPENAI_API_KEY` | Vector mode only | none | Enables OpenAI vector store upload and vector-store search. Not used for model reasoning. |
+| `OPENAI_VECTOR_STORE_ID` | Vector mode only | none | Vector store containing uploaded wiki records. |
+| `OPENAI_VECTOR_SEARCH_MAX_RESULTS` | No | `8` | Max vector-search chunks per screen. |
+| `OPENROUTER_API_KEY` | Model mode only | none | Enables OpenRouter model-backed oracle validation and optional Stagehand model calls. |
+| `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API base URL. |
+| `OPENROUTER_ORACLE_ROUTING` | No | `auto` | `auto`, `light`, `heavy`, or an explicit OpenRouter model id. |
+| `OPENROUTER_ORACLE_LIGHT_MODEL` | No | `openai/gpt-5.1-chat` | Lower-cost oracle model for routine screens. |
+| `OPENROUTER_ORACLE_HEAVY_MODEL` | No | `openai/gpt-5.5` | Heavier oracle model for complex screens. |
+| `OPENROUTER_ORACLE_MAX_TOKENS` | No | `1200` | Max oracle completion tokens per call. |
+| `OPENROUTER_MAX_RUN_COST_USD` | No | `100` | Estimated model-spend guard for one process. |
+| `QA_ORACLE_MODEL` | No | `openai/gpt-5.1-chat` | Fallback oracle model id when routing selects light/manual mode. |
 | `STAGEHAND_ENV` | No | `LOCAL` | `LOCAL` or `BROWSERBASE`. |
-| `STAGEHAND_MODEL_NAME` | No | `openai/gpt-4.1-mini` | Model used by Stagehand observe/act calls. |
+| `STAGEHAND_MODEL_NAME` | No | `openai/openai/gpt-5.1-chat` with OpenRouter | Model used by Stagehand observe/act calls. The doubled provider prefix lets Stagehand send `openai/gpt-5.1-chat` to OpenRouter. |
 | `BROWSERBASE_API_KEY` | Browserbase mode only | none | Browserbase API key for hosted browser sessions. |
 | `BROWSERBASE_PROJECT_ID` | Browserbase mode only | none | Browserbase project ID. |
 
@@ -264,6 +279,15 @@ OPENAI_API_KEY=sk-... npx tsx src/cli.ts upload-kb \
   --vector-store-name unified-wiki
 ```
 
+For large wikis, use the consolidated upload mode. This uploads one searchable markdown bundle instead of hundreds of individual files:
+
+```bash
+npx tsx src/cli.ts upload-kb \
+  --manifest data/wiki/manifest.json \
+  --vector-store-name unified-wiki \
+  --consolidated
+```
+
 The command prints a vector store id like `vs_...`. Add it to `.env.local`:
 
 ```bash
@@ -292,13 +316,13 @@ Run with a visible browser:
 npm run qa:run -- --headed
 ```
 
-Run with OpenAI model-backed oracle and vector-store file search:
+Run with OpenAI vector retrieval and OpenRouter model-backed oracle:
 
 ```bash
 npm run qa:run -- --vector-store-id "$OPENAI_VECTOR_STORE_ID"
 ```
 
-Run with both OpenAI oracle and Stagehand:
+Run with OpenAI vector retrieval, OpenRouter oracle, and Stagehand routed through OpenRouter:
 
 ```bash
 npm run qa:run -- --stagehand --vector-store-id "$OPENAI_VECTOR_STORE_ID"
@@ -329,11 +353,11 @@ Each loop does the following:
 
 1. Captures the current URL, route key, visible text, controls, forms, tables, breadcrumbs, screenshot, DOM snapshot, console messages, and network failures.
 2. Classifies the page as auth, dashboard, list/table, detail, form, settings, modal, wizard, report, error, empty, or unknown.
-3. Retrieves relevant local wiki chunks and, when configured, asks OpenAI file search for vector-store evidence.
+3. Retrieves relevant local wiki chunks and, when configured, asks OpenAI vector-store search for additional evidence.
 4. Infers candidate actions such as navigation, search, filter, open detail, create sandbox record, edit sandbox record, export, cancel/back, and logout.
 5. Applies safe-action policy before execution.
 6. Executes through Playwright locators first. Stagehand `page.act()` is used only as a bounded fallback when `--stagehand` is enabled.
-7. Validates transitions, visible success/error text, persistence hints, console/runtime errors, failed requests, dead-end states, and wiki/product mismatches.
+7. Validates transitions, visible success/error text, persistence hints, console/runtime errors, failed requests, dead-end states, and wiki/product mismatches using OpenRouter when configured.
 8. Records evidence and updates the coverage graph.
 
 Completion means the route/action frontier is exhausted, or every remaining item is blocked/skipped with evidence.
@@ -404,12 +428,13 @@ It stores routes, transitions, observations, attempted actions, blocked/skipped 
 
 ## CI
 
-The included GitHub Actions workflow installs dependencies, installs Playwright Chromium, builds, and runs tests. To run live QA in CI, add repository secrets for the Unified profile and, optionally, OpenAI:
+The included GitHub Actions workflow installs dependencies, installs Playwright Chromium, builds, and runs tests. To run live QA in CI, add repository secrets for the Unified profile and, optionally, OpenAI/OpenRouter:
 
 - `UNIFIED_QA_EMAIL`
 - `UNIFIED_QA_PASSWORD`
 - `OPENAI_API_KEY`
 - `OPENAI_VECTOR_STORE_ID`
+- `OPENROUTER_API_KEY`
 
 Keep live QA jobs pointed at a sandbox tenant.
 
@@ -428,13 +453,13 @@ The current test suite covers local KB retrieval, page classification, route key
 : Increase `QA_SAFETY_STEP_LIMIT`, pass `--max-steps`, or resume the run. The limit is a safety guard, not a coverage target.
 
 `Stagehand initialization failed; falling back to Playwright only`
-: Check `OPENAI_API_KEY`, `STAGEHAND_MODEL_NAME`, and `STAGEHAND_ENV`. Fallback mode still runs.
+: Check `OPENROUTER_API_KEY`, `STAGEHAND_MODEL_NAME`, `OPENROUTER_BASE_URL`, and `STAGEHAND_ENV`. Fallback mode still runs.
 
 `No wiki context was available`
 : Run `npm run qa:ingest` and confirm `data/wiki/articles.jsonl` exists, or set `QA_WIKI_JSONL`.
 
-`OpenAI oracle is heuristic only`
-: Set both `OPENAI_API_KEY` and `OPENAI_VECTOR_STORE_ID`.
+`Oracle is heuristic only`
+: Set `OPENROUTER_API_KEY` for model-backed validation. Set `OPENAI_API_KEY` and `OPENAI_VECTOR_STORE_ID` for vector-store retrieval.
 
 `Login keeps looping`
 : Remove stale auth state under `.qa/auth/` or `.qa/stagehand-user-data/`, then rerun.
