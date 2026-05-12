@@ -23,6 +23,15 @@ try {
     case "worker":
       await runWorker();
       break;
+    case "live":
+      await serveLive();
+      break;
+    case "index-code":
+      await indexCode(args);
+      break;
+    case "analyze-pr":
+      await analyzePr(args);
+      break;
     case "report":
       await report(args);
       break;
@@ -129,6 +138,52 @@ async function runWorker(): Promise<void> {
   await runCloudWorker();
 }
 
+async function serveLive(): Promise<void> {
+  const { startLiveApi } = await import("./live/liveApi.js");
+  await startLiveApi();
+}
+
+async function indexCode(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      org: { type: "string", default: "Unified-Solutions-EMS" },
+      "limit-repos": { type: "string" },
+      "no-embed": { type: "boolean" }
+    }
+  });
+  const { indexUnifiedCodebase } = await import("./codegraph/indexer.js");
+  const result = await indexUnifiedCodebase({
+    org: stringOption(values.org) ?? "Unified-Solutions-EMS",
+    ...(values["limit-repos"] ? { limitRepos: Number(values["limit-repos"]) } : {}),
+    ...(values["no-embed"] ? { embed: false } : {})
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+async function analyzePr(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      url: { type: "string", short: "u" },
+      tenant: { type: "string" },
+      role: { type: "string" },
+      budget: { type: "string" }
+    }
+  });
+  const prUrl = stringOption(values.url) ?? positionals[0];
+  if (!prUrl) throw new Error("Missing PR URL. Use analyze-pr <github-pr-url>.");
+  const { analyzePullRequestImpact } = await import("./github/prAnalyzer.js");
+  const result = await analyzePullRequestImpact({
+    prUrl,
+    tenant: stringOption(values.tenant) ?? process.env.UNIFIED_QA_TENANT ?? "demo",
+    role: stringOption(values.role) ?? process.env.UNIFIED_QA_ROLE ?? "admin",
+    ...(values.budget ? { budgetUsd: Number(values.budget) } : {})
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function report(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
@@ -167,6 +222,9 @@ Commands:
   run --base-url https://sso.unified-apps.com/login [--stagehand] [--resume <runId>]
   api
   worker
+  live
+  index-code --org Unified-Solutions-EMS [--limit-repos 18] [--no-embed]
+  analyze-pr <github-pr-url> [--budget 10]
   report --run-id <runId>
 
 Common run options:

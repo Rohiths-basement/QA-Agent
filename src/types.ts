@@ -283,6 +283,8 @@ export interface RunRequest {
   enableStagehand?: boolean;
   baselineRunId?: string;
   promoteBaseline?: boolean;
+  prUrl?: string;
+  budgetProfile?: BudgetProfile;
 }
 
 export interface ImpactPlan {
@@ -324,4 +326,94 @@ export interface BaselineComparison {
     changed: string[];
     unchanged: string[];
   };
+}
+
+export interface BudgetProfile {
+  budgetUsd: number;
+  tier: "micro" | "standard" | "deep" | "release";
+  lightModel: string;
+  heavyModel: string;
+  selectedModel: string;
+  maxSteps: number;
+  maxDepth: number;
+  oracleFrequency: "minimal" | "selective" | "normal" | "aggressive";
+  allowStagehand: boolean;
+  allowHeavyModel: boolean;
+  rationale: string;
+}
+
+export interface BrowserSession {
+  sessionId: string;
+  runId: string;
+  tenant: string;
+  role: string;
+  currentUrl?: string;
+  status: "starting" | "ready" | "failed" | "closed" | "expired";
+  slackChannel?: string;
+  slackThreadTs?: string;
+  createdAt: string;
+  lastObservationAt?: string;
+  expiresAt: string;
+  error?: string;
+}
+
+export interface SessionObservation {
+  sessionId: string;
+  screen: ScreenState;
+  summary: string;
+  screenshotUrl?: string;
+}
+
+export interface PrImpactRequest {
+  prUrl: string;
+  tenant: string;
+  role: string;
+  budgetUsd?: number;
+  requestedBy?: string;
+  slackChannel?: string;
+  slackThreadTs?: string;
+}
+
+export interface PrImpactPlan {
+  prUrl: string;
+  repo: string;
+  owner: string;
+  number: number;
+  title: string;
+  filesChanged: string[];
+  modules: string[];
+  routes: string[];
+  confidence: number;
+  summary: string;
+  budgetProfile?: BudgetProfile;
+}
+
+export type CodeGraphNodeType = "repo" | "file" | "symbol" | "route" | "module" | "wiki" | "chunk";
+
+export interface CodeGraphNode {
+  id: string;
+  type: CodeGraphNodeType;
+  repo?: string;
+  path?: string;
+  name: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CodeGraphEdge {
+  fromId: string;
+  toId: string;
+  type: "contains" | "depends_on" | "renders" | "mentions" | "maps_to" | "changed_by";
+  metadata?: Record<string, unknown>;
+}
+
+export interface CodeSearchResult {
+  repo: string;
+  path: string;
+  chunkId: string;
+  text: string;
+  score: number;
+  symbols?: string[];
+  routes?: string[];
+  modules?: string[];
+  metadata?: Record<string, unknown>;
 }

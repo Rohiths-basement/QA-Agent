@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { RunActionPolicy, RunRequest } from "../types.js";
+import { applyBudgetProfile } from "../budget/budgetPolicy.js";
 import { envString } from "./env.js";
 
 export type SlackCommandIntent =
@@ -7,6 +8,7 @@ export type SlackCommandIntent =
   | { kind: "status"; jobId: string }
   | { kind: "report"; jobId: string }
   | { kind: "approve"; approvalRef: string }
+  | { kind: "pr"; request: RunRequest }
   | { kind: "clarify"; message: string };
 
 export interface SlackContext {
@@ -46,12 +48,28 @@ export function parseQaText(text: string, context: SlackContext): SlackCommandIn
   if (verb === "status") return prompt ? { kind: "status", jobId: prompt } : { kind: "clarify", message: "Send `/qa status <jobId>`." };
   if (verb === "report") return prompt ? { kind: "report", jobId: prompt } : { kind: "clarify", message: "Send `/qa report <jobId>`." };
   if (verb === "approve") return prompt ? { kind: "approve", approvalRef: prompt } : { kind: "clarify", message: "Send `/qa approve <jobId/actionId>`." };
+  if (verb === "pr") {
+    const prUrl = extractGithubPrUrl(prompt);
+    if (!prUrl) return { kind: "clarify", message: "Send `/qa pr <github-pr-url> [budget]`." };
+    return {
+      kind: "pr",
+      request: applyBudgetProfile(baseRequest({
+        type: "recent_change",
+        prompt,
+        tenant: context.defaultTenant,
+        role: context.defaultRole,
+        actionPolicy: "read_only",
+        context,
+        prUrl
+      }))
+    };
+  }
 
   if (verb === "full" || verb === "baseline") {
     const parsed = parseTenantRoleBudget(prompt, context);
     return {
       kind: "run",
-      request: baseRequest({
+      request: applyBudgetProfile(baseRequest({
         type: verb === "baseline" ? "baseline" : "full",
         prompt,
         tenant: parsed.tenant,
@@ -59,7 +77,7 @@ export function parseQaText(text: string, context: SlackContext): SlackCommandIn
         actionPolicy: "sandbox_mutation",
         context,
         ...(parsed.budgetUsd ? { budgetUsd: parsed.budgetUsd } : {})
-      })
+      }))
     };
   }
 
@@ -69,7 +87,7 @@ export function parseQaText(text: string, context: SlackContext): SlackCommandIn
     }
     return {
       kind: "run",
-      request: baseRequest({
+      request: applyBudgetProfile(baseRequest({
         type: verb === "recent" ? "recent_change" : verb,
         prompt,
         tenant: context.defaultTenant,
@@ -77,7 +95,7 @@ export function parseQaText(text: string, context: SlackContext): SlackCommandIn
         actionPolicy: "read_only",
         context,
         seedUrls: extractUrls(prompt)
-      })
+      }))
     };
   }
 
@@ -93,10 +111,25 @@ export function parseConversationalQaText(text: string, context: SlackContext): 
   const isFull = /\b(full|end-to-end|e2e|entire app|whole app)\b/.test(normalized);
   const isRecent = /\b(recent|changed|change|release|new feature|impact)\b/.test(normalized);
   const isFlow = /\b(flow|workflow|journey)\b/.test(normalized);
+  const prUrl = extractGithubPrUrl(cleaned);
+  if (prUrl) {
+    return {
+      kind: "pr",
+      request: applyBudgetProfile(baseRequest({
+        type: "recent_change",
+        prompt: cleaned,
+        tenant: context.defaultTenant,
+        role: context.defaultRole,
+        actionPolicy: "read_only",
+        context,
+        prUrl
+      }))
+    };
+  }
   const type = isFull ? "full" : isRecent ? "recent_change" : isFlow ? "flow" : "screen";
   return {
     kind: "run",
-    request: baseRequest({
+    request: applyBudgetProfile(baseRequest({
       type,
       prompt: cleaned,
       tenant: context.defaultTenant,
@@ -104,7 +137,7 @@ export function parseConversationalQaText(text: string, context: SlackContext): 
       actionPolicy: isFull ? "sandbox_mutation" : "read_only",
       context,
       seedUrls: extractUrls(cleaned)
-    })
+    }))
   };
 }
 
@@ -146,6 +179,7 @@ function baseRequest(input: {
   actionPolicy: RunActionPolicy;
   context: SlackContext;
   seedUrls?: string[];
+  prUrl?: string;
 }): RunRequest {
   return {
     type: input.type,
@@ -157,7 +191,8 @@ function baseRequest(input: {
     ...(input.context.requestedBy ? { requestedBy: input.context.requestedBy } : {}),
     ...(input.context.slackChannel ? { slackChannel: input.context.slackChannel } : {}),
     ...(input.context.slackThreadTs ? { slackThreadTs: input.context.slackThreadTs } : {}),
-    ...(input.seedUrls?.length ? { seedUrls: input.seedUrls } : {})
+    ...(input.seedUrls?.length ? { seedUrls: input.seedUrls } : {}),
+    ...(input.prUrl ? { prUrl: input.prUrl } : {})
   };
 }
 
@@ -175,6 +210,10 @@ function parseTenantRoleBudget(text: string, context: SlackContext): { tenant: s
 
 function extractUrls(text: string): string[] {
   return Array.from(text.matchAll(/https?:\/\/[^\s<>"')]+/gi), (match) => match[0].replace(/[),.;]+$/g, ""));
+}
+
+function extractGithubPrUrl(text: string): string | undefined {
+  return extractUrls(text).find((url) => /github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(url));
 }
 
 function timingSafeEqual(left: string, right: string): boolean {

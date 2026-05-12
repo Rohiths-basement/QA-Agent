@@ -17,11 +17,14 @@
     "qa:report": "tsx src/cli.ts report",
     "cloud:api": "tsx src/cli.ts api",
     "cloud:worker": "tsx src/cli.ts worker",
+    "cloud:live": "tsx src/cli.ts live",
+    "kg:index": "tsx src/cli.ts index-code --org Unified-Solutions-EMS",
     "deploy:gcp": "scripts/deploy-gcp.sh"
   },
   "dependencies": {
     "@browserbasehq/stagehand": "^2.5.8",
     "@google-cloud/storage": "^7.19.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cheerio": "^1.1.2",
     "dotenv": "^16.4.5",
     "openai": "^6.8.0",

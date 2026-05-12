@@ -7,6 +7,7 @@ import { uploadArtifacts } from "./artifacts.js";
 import { analyzeImpact, seedUrlsForImpact } from "./impactAnalyzer.js";
 import { createJobStore, newQueuedJob } from "./jobStore.js";
 import { postSlackMessage } from "./slack.js";
+import { planRunRequest } from "./runControl.js";
 
 const DEFAULT_BASE_URL = "https://sso.unified-apps.com/login";
 const DEFAULT_WIKI_URL = "https://wiki.unified-apps.com/";
@@ -20,8 +21,8 @@ export async function runCloudWorker(): Promise<void> {
   await store.updateJob(jobId, { status: "running", startedAt: nowIso() });
 
   try {
-    if (request.budgetUsd) process.env.OPENROUTER_MAX_RUN_COST_USD = String(request.budgetUsd);
     const config = await configForRequest(jobId, request);
+    if (config.runRequest?.budgetUsd) process.env.OPENROUTER_MAX_RUN_COST_USD = String(config.runRequest.budgetUsd);
     const result = await runQaAgent(config);
     const uploadedUrls = await uploadArtifacts({ runId: result.runId, artifactDir: config.artifactDir });
     const reportUrls = uploadedUrls.length ? uploadedUrls : [result.reportJsonPath, result.reportHtmlPath];
@@ -48,11 +49,14 @@ export async function runCloudWorker(): Promise<void> {
 }
 
 async function configForRequest(jobId: string, request: RunRequest): Promise<AgentConfig> {
+  const planned = await planRunRequest(request);
+  if (planned.plan.runScope === "clarify") throw new Error(planned.plan.missingInfo.join(" ") || "Run request needs more detail.");
+  const effectiveRequest = planned.request;
   const baseUrl = envString("UNIFIED_QA_BASE_URL", DEFAULT_BASE_URL) ?? DEFAULT_BASE_URL;
-  const impactPlan = await analyzeImpact(request);
-  const seedUrls = request.seedUrls?.length ? request.seedUrls : seedUrlsForImpact(impactPlan, baseUrl);
-  const isTargetedScreen = request.type === "screen";
-  const defaultMaxSteps = request.type === "full" || request.type === "baseline"
+  const impactPlan = await analyzeImpact(effectiveRequest);
+  const seedUrls = effectiveRequest.seedUrls?.length ? effectiveRequest.seedUrls : seedUrlsForImpact(impactPlan, baseUrl);
+  const isTargetedScreen = effectiveRequest.type === "screen";
+  const defaultMaxSteps = effectiveRequest.type === "full" || effectiveRequest.type === "baseline"
     ? envNumber("QA_FULL_RUN_MAX_STEPS", 1000)
     : envNumber("QA_TARGETED_RUN_MAX_STEPS", 80);
   const artifactDir = path.resolve(envString("QA_ARTIFACT_DIR", "/tmp/qa-artifacts/runs") ?? "/tmp/qa-artifacts/runs");
@@ -65,21 +69,21 @@ async function configForRequest(jobId: string, request: RunRequest): Promise<Age
     baseUrl,
     wikiUrl: envString("UNIFIED_QA_WIKI_URL", DEFAULT_WIKI_URL) ?? DEFAULT_WIKI_URL,
     runId: jobId,
-    tenant: request.tenant,
-    role: request.role,
-    maxSteps: request.maxSteps ?? defaultMaxSteps,
+    tenant: effectiveRequest.tenant,
+    role: effectiveRequest.role,
+    maxSteps: effectiveRequest.maxSteps ?? defaultMaxSteps,
     headless: !envBoolean("QA_HEADED", false),
-    useStagehand: request.enableStagehand === true || envBoolean("QA_ENABLE_STAGEHAND", false),
+    useStagehand: effectiveRequest.enableStagehand === true || envBoolean("QA_ENABLE_STAGEHAND", false),
     approvalMode: "block",
     ...(vectorStoreId ? { vectorStoreId } : {}),
     ...(wikiJsonlPath ? { wikiJsonlPath } : {}),
-    model: envString("QA_ORACLE_MODEL", envString("OPENROUTER_ORACLE_LIGHT_MODEL", "openai/gpt-5.1-chat")) ?? "openai/gpt-5.1-chat",
+    model: effectiveRequest.budgetProfile?.selectedModel ?? envString("QA_ORACLE_MODEL", envString("OPENROUTER_ORACLE_LIGHT_MODEL", "openai/gpt-5.1-chat")) ?? "openai/gpt-5.1-chat",
     storagePath,
     artifactDir,
     ...(credentialsFile ? { credentialsFile } : {}),
     ...(seedUrls.length ? { seedUrls } : {}),
-    discoverLinks: isTargetedScreen ? false : request.type !== "screen",
-    runRequest: request
+    discoverLinks: isTargetedScreen ? false : effectiveRequest.type !== "screen",
+    runRequest: effectiveRequest
   };
 }
 

@@ -162,7 +162,13 @@ src/memory/sqliteMemory.ts          resumable app-state memory
 src/validator/validator.ts          bug detection and severity classification
 src/report/reporter.ts              JSON/HTML report generation
 src/cloud/*                         Cloud Run API, worker, Slack, impact, baselines
+src/hermes/mcp.ts                   MCP tools consumed by Hermes
+src/live/*                          interactive browser session API
+src/github/*                        GitHub App client and PR impact analyzer
+src/codegraph/*                     Cloud SQL/pgvector code graph indexer/search
+src/budget/budgetPolicy.ts          budget-aware model/scope policy
 scripts/deploy-gcp.sh               GCP deployment script
+scripts/deploy-hermes-gce.sh        GCE Hermes gateway deployment script
 test/*.test.ts                      unit coverage for core behavior
 ```
 
@@ -195,10 +201,100 @@ Cloud components:
 
 - `qa-api`: Cloud Run HTTP service for Slack slash commands, events, status, report lookup, and approvals.
 - `qa-worker`: Cloud Run Job for long browser runs. The API launches it asynchronously with a serialized `RunRequest`.
+- `qa-live`: warm Cloud Run service for conversational browser sessions: start, observe, act, close.
+- `qa-code-indexer`: Cloud Run Job that indexes the Unified GitHub org into Cloud SQL Postgres + pgvector.
+- `qa-hermes-gateway`: GCE VM running Hermes Agent over Slack Socket Mode and connected to `qa-api` through MCP.
 - Cloud SQL Postgres: durable job status and report URL registry.
+- Cloud SQL + pgvector code graph: repository chunks, extracted symbols, route hints, module hints, and optional OpenAI embeddings.
 - GCS: report, screenshot, trace, and DOM artifacts.
-- Secret Manager: Slack secrets, Unified credentials, OpenAI key, OpenRouter key, vector store id, and database URL.
+- Secret Manager: Slack secrets, Unified credentials, GitHub App credentials, OpenAI key, OpenRouter key, vector store id, database URL, and internal MCP/live token.
 - Cloud Logging/Monitoring: runtime logs, Cloud Build logs, and worker failure traces.
+
+## Hermes Conversational Layer
+
+Hermes is the always-on Slack brain. This repo exposes the QA system to Hermes through an HTTP MCP server at:
+
+```text
+<qa-api-url>/mcp
+```
+
+Hermes receives Slack DMs/mentions through Socket Mode, reasons over the user’s request, and calls QA tools such as:
+
+```text
+budget_plan_run
+qa_run_full
+qa_run_targeted
+qa_analyze_pr
+qa_run_pr
+qa_get_status
+qa_get_report
+live_start_session
+live_observe_screen
+live_act_on_screen
+live_close_session
+kg_search_code
+```
+
+This supports interactive prompts like:
+
+```text
+@QA Agent test this PR with a $10 budget: https://github.com/Unified-Solutions-EMS/CAD/pull/123
+@QA Agent start a browser session and tell me what buttons are visible.
+@QA Agent click Search and summarize what changed.
+@QA Agent QA the Crew Scheduling dashboard but keep it read-only.
+```
+
+MCP and live-browser endpoints are protected by `QA_INTERNAL_TOKEN`/`QA_MCP_TOKEN`; Slack slash/events still use Slack request signing.
+
+## PR Impact And Code Graph
+
+The PR workflow uses a GitHub App, not a personal token. The app credentials are stored in Secret Manager:
+
+```text
+qa-github-app-id
+qa-github-app-installation-id
+qa-github-app-private-key-base64
+```
+
+For local/dev testing before the GitHub App is installed, `GITHUB_TOKEN` is supported as a temporary fallback. Production should use the GitHub App so access can be scoped and rotated independently.
+
+The code graph indexer scans all currently visible repos in `Unified-Solutions-EMS` by default (`CODEGRAPH_MAX_REPOS=18`), chunks text files, extracts symbols/routes/modules, stores records in Cloud SQL Postgres, and adds `pgvector` embeddings when `OPENAI_API_KEY` is available.
+
+Run locally:
+
+```bash
+npm run kg:index
+tsx src/cli.ts analyze-pr https://github.com/Unified-Solutions-EMS/CAD/pull/123 --budget 10
+```
+
+Run in GCP:
+
+```bash
+gcloud run jobs execute qa-code-indexer --region us-central1
+```
+
+For a PR Slack prompt, Hermes calls `qa_analyze_pr` or `qa_run_pr`; the analyzer reads changed files, searches the code graph, maps likely modules/routes, applies the budget profile, and queues only the impacted QA scope.
+
+## Budget Layer
+
+Every Slack/Hermes run can include a budget:
+
+```text
+with a $5 budget
+budget 10
+/qa full demo admin 25
+```
+
+Budget tiers:
+
+```text
+micro    <= $5    deterministic Playwright, shallow target, light model only
+standard <= $25   bounded targeted coverage, selective oracle calls, light model
+deep     <= $100  broader coverage, Stagehand allowed, heavy model allowed for ambiguity
+release  >  $100  widest coverage, heavy model selected, aggressive validation
+```
+
+The estimate is intentionally conservative. It primarily controls model selection, max steps, max depth, oracle frequency, and whether Stagehand is allowed.
 
 Slack commands:
 
@@ -229,6 +325,7 @@ Deploy:
 npm run build
 npm test
 npm run deploy:gcp
+scripts/deploy-hermes-gce.sh
 ```
 
 The deploy script will:
@@ -240,7 +337,17 @@ The deploy script will:
 5. Copy local secrets from `.env.local` into Secret Manager.
 6. Build the container with Cloud Build.
 7. Deploy `qa-worker` as a Cloud Run Job.
-8. Deploy `qa-api` as a public Cloud Run service for Slack ingress.
+8. Deploy `qa-code-indexer` as a Cloud Run Job.
+9. Deploy `qa-live` as a warm single-instance Cloud Run service.
+10. Deploy `qa-api` as a public Cloud Run service for Slack ingress and MCP.
+
+The Hermes script will:
+
+1. Create or update the `qa-hermes-gateway` GCE VM.
+2. Install Hermes Agent with the official installer.
+3. Load Slack/OpenRouter/internal QA secrets from Secret Manager.
+4. Configure Hermes to call `<qa-api-url>/mcp`.
+5. Start a `hermes-qa-gateway` systemd service.
 
 Useful deployment overrides:
 
@@ -254,9 +361,12 @@ After deployment, configure Slack:
 
 - Slash command request URL: `<qa-api-url>/slack/commands`
 - Events request URL: `<qa-api-url>/slack/events`
-- Required Slack secrets in Secret Manager: `qa-slack-signing-secret`, `qa-slack-bot-token`
+- Hermes MCP URL: `<qa-api-url>/mcp`
+- Required Slack secrets in Secret Manager: `qa-slack-signing-secret`, `qa-slack-bot-token`, `qa-slack-app-token`
 
 Without Slack secrets, `/health` works and the service is deployed, but Slack endpoints return a clear configuration error.
+
+See [docs/slack-hermes-setup.md](docs/slack-hermes-setup.md) for the app-level token, scopes, Socket Mode, and troubleshooting steps. See [docs/github-app-setup.md](docs/github-app-setup.md) for GitHub App setup. See [docs/hermes-qa-agent-one-pager.md](docs/hermes-qa-agent-one-pager.md) for a short operator guide.
 
 ## Cloud Environment Variables
 
@@ -291,8 +401,8 @@ Minimum local credentials:
 ```bash
 UNIFIED_QA_BASE_URL=https://sso.unified-apps.com/login
 UNIFIED_QA_WIKI_URL=https://wiki.unified-apps.com/
-UNIFIED_QA_EMAIL=newdemoadmin@demo.demo
-UNIFIED_QA_PASSWORD=iloveunified
+UNIFIED_QA_EMAIL=<qa-login-email>
+UNIFIED_QA_PASSWORD=<qa-login-password>
 UNIFIED_QA_TENANT=demo
 UNIFIED_QA_ROLE=admin
 ```
@@ -338,8 +448,8 @@ For a single account, `.env.local` is enough. For multiple tenants or roles, use
     {
       "tenant": "demo",
       "role": "admin",
-      "email": "newdemoadmin@demo.demo",
-      "password": "iloveunified"
+      "email": "admin@example.com",
+      "password": "set-locally"
     },
     {
       "tenant": "demo",

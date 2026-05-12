@@ -593,9 +593,12 @@ function stagehandEnv(): "LOCAL" | "BROWSERBASE" {
 }
 
 function stagehandModelName(): string {
-  if (process.env.STAGEHAND_MODEL_NAME) return process.env.STAGEHAND_MODEL_NAME;
-  if (process.env.STAGEHAND_MODEL) return process.env.STAGEHAND_MODEL;
-  return process.env.OPENROUTER_API_KEY ? "openai/openai/gpt-5.1-chat" : "openai/gpt-4.1-mini";
+  const configured = process.env.STAGEHAND_MODEL_NAME ?? process.env.STAGEHAND_MODEL ?? process.env.QA_ORACLE_MODEL ?? process.env.OPENROUTER_ORACLE_LIGHT_MODEL;
+  if (process.env.OPENROUTER_API_KEY) {
+    const openRouterModel = configured ?? "openai/gpt-5.1-chat";
+    return openRouterModel.startsWith("openai/") ? `openai/${openRouterModel}` : `openai/${openRouterModel}`;
+  }
+  return configured ?? "openai/gpt-4.1-mini";
 }
 
 function optionalStagehandModelClientOptions(): Record<string, unknown> {

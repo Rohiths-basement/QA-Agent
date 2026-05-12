@@ -39,6 +39,16 @@ describe("Slack QA intent parsing", () => {
     assert.match(intent.request.prompt ?? "", /CAD map/);
   });
 
+  it("parses PR-linked runs with budget", () => {
+    const intent = parseQaText("pr https://github.com/Unified-Solutions-EMS/CAD/pull/123 budget $10", context);
+    assert.equal(intent.kind, "pr");
+    if (intent.kind !== "pr") return;
+    assert.equal(intent.request.prUrl, "https://github.com/Unified-Solutions-EMS/CAD/pull/123");
+    assert.equal(intent.request.type, "recent_change");
+    assert.equal(intent.request.budgetUsd, 10);
+    assert.equal(intent.request.actionPolicy, "read_only");
+  });
+
   it("verifies Slack request signatures", () => {
     const signingSecret = "secret";
     const timestamp = String(Math.floor(Date.now() / 1000));
