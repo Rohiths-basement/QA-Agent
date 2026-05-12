@@ -17,6 +17,12 @@ try {
     case "run":
       await runAgent(args);
       break;
+    case "api":
+      await serveApi();
+      break;
+    case "worker":
+      await runWorker();
+      break;
     case "report":
       await report(args);
       break;
@@ -100,7 +106,9 @@ async function runAgent(argv: string[]): Promise<void> {
       model: { type: "string" },
       "storage-path": { type: "string" },
       "artifact-dir": { type: "string" },
-      "credentials-file": { type: "string" }
+      "credentials-file": { type: "string" },
+      "seed-url": { type: "string" },
+      "no-discovery": { type: "boolean" }
     }
   });
   const config = readAgentConfig(values);
@@ -109,6 +117,16 @@ async function runAgent(argv: string[]): Promise<void> {
   console.log(`Run ${result.status}: ${result.runId}`);
   console.log(`JSON report: ${result.reportJsonPath}`);
   console.log(`HTML report: ${result.reportHtmlPath}`);
+}
+
+async function serveApi(): Promise<void> {
+  const { startCloudApi } = await import("./cloud/api.js");
+  await startCloudApi();
+}
+
+async function runWorker(): Promise<void> {
+  const { runCloudWorker } = await import("./cloud/worker.js");
+  await runCloudWorker();
 }
 
 async function report(argv: string[]): Promise<void> {
@@ -147,6 +165,8 @@ Commands:
   ingest-wiki --url https://wiki.unified-apps.com/ [--out data/wiki]
   upload-kb --manifest data/wiki/manifest.json [--vector-store-id vs_...] [--consolidated]
   run --base-url https://sso.unified-apps.com/login [--stagehand] [--resume <runId>]
+  api
+  worker
   report --run-id <runId>
 
 Common run options:
@@ -155,6 +175,8 @@ Common run options:
   --wiki-jsonl data/wiki/articles.jsonl
   --vector-store-id <id>
   --model openai/gpt-5.1-chat
+  --seed-url https://app.unified-apps.com/path[,https://...]
+  --no-discovery
   --headed
   --allow-destructive
 `);

@@ -54,7 +54,10 @@ export async function runQaAgent(config: AgentConfig): Promise<AgentRunResult> {
       metadata: {
         wikiUrl: config.wikiUrl,
         vectorStoreId: config.vectorStoreId,
-        stagehand: config.useStagehand
+        stagehand: config.useStagehand,
+        seedUrls: config.seedUrls ?? [],
+        discoverLinks: config.discoverLinks !== false,
+        runRequest: config.runRequest ?? null
       }
     });
 
@@ -75,6 +78,11 @@ export async function runQaAgent(config: AgentConfig): Promise<AgentRunResult> {
     } else {
       await runtime.login(credentials);
       steps.push(`Login as ${config.tenant}/${config.role}`);
+      const seedUrl = queueSeedUrls(config.seedUrls ?? [], config.baseUrl, coverage);
+      if (seedUrl) {
+        await runtime.goto(seedUrl);
+        steps.push(`Navigate to requested seed route ${seedUrl}`);
+      }
     }
 
     let lastExecution: ExecuteResult | undefined;
@@ -84,7 +92,7 @@ export async function runQaAgent(config: AgentConfig): Promise<AgentRunResult> {
     for (; step < config.maxSteps; step += 1) {
       const screen = await runtime.observe();
       coverage.recordObservation(screen);
-      discoverRoutesFromScreen(screen, coverage);
+      if (config.discoverLinks !== false) discoverRoutesFromScreen(screen, coverage);
 
       const stagehandObservations = config.useStagehand
         ? await runtime.stagehandObserve("Find actionable controls, navigation targets, forms, and destructive actions on this screen.")
@@ -228,4 +236,12 @@ function discoverRoutesFromScreen(screen: ScreenState, coverage: CoverageEngine)
     const url = scopedUnifiedUrl(screen.url, control.href);
     if (url) coverage.queueDiscoveredUrl(url);
   }
+}
+
+function queueSeedUrls(seedUrls: string[], baseUrl: string, coverage: CoverageEngine): string | undefined {
+  const scopedSeeds = seedUrls
+    .map((seedUrl) => scopedUnifiedUrl(baseUrl, seedUrl) ?? scopedUnifiedUrl(seedUrl, seedUrl))
+    .filter((seedUrl): seedUrl is string => Boolean(seedUrl));
+  for (const seedUrl of scopedSeeds) coverage.queueDiscoveredUrl(seedUrl);
+  return scopedSeeds[0];
 }

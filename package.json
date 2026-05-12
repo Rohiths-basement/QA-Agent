@@ -14,19 +14,25 @@
     "test": "tsx --test test/**/*.test.ts",
     "qa:ingest": "tsx src/cli.ts ingest-wiki --url https://wiki.unified-apps.com/",
     "qa:run": "tsx src/cli.ts run --base-url https://sso.unified-apps.com/login",
-    "qa:report": "tsx src/cli.ts report"
+    "qa:report": "tsx src/cli.ts report",
+    "cloud:api": "tsx src/cli.ts api",
+    "cloud:worker": "tsx src/cli.ts worker",
+    "deploy:gcp": "scripts/deploy-gcp.sh"
   },
   "dependencies": {
     "@browserbasehq/stagehand": "^2.5.8",
+    "@google-cloud/storage": "^7.19.0",
     "cheerio": "^1.1.2",
     "dotenv": "^16.4.5",
     "openai": "^6.8.0",
+    "pg": "^8.20.0",
     "playwright": "^1.57.0",
     "turndown": "^7.2.1",
     "zod": "3.25.67"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "@types/pg": "^8.20.0",
     "@types/turndown": "^5.0.5",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"

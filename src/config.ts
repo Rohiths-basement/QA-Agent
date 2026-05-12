@@ -32,7 +32,9 @@ export function readAgentConfig(options: CliOptions): AgentConfig {
     model: stringOption(options.model) ?? process.env.QA_ORACLE_MODEL ?? process.env.OPENROUTER_ORACLE_LIGHT_MODEL ?? "openai/gpt-5.1-chat",
     storagePath,
     artifactDir,
-    ...optional("credentialsFile", stringOption(options["credentials-file"]) ?? process.env.QA_CREDENTIALS_FILE)
+    ...optional("credentialsFile", stringOption(options["credentials-file"]) ?? process.env.QA_CREDENTIALS_FILE),
+    ...optionalArray("seedUrls", listOption(options["seed-url"]) ?? listOption(process.env.QA_SEED_URLS)),
+    ...(booleanOption(options["no-discovery"]) ? { discoverLinks: false } : {})
   };
 }
 
@@ -58,4 +60,15 @@ function requiredString(value: unknown, message: string): string {
 
 function optional<K extends string>(key: K, value: string | undefined): Record<K, string> | Record<string, never> {
   return value ? { [key]: value } as Record<K, string> : {};
+}
+
+function optionalArray<K extends string>(key: K, value: string[] | undefined): Record<K, string[]> | Record<string, never> {
+  return value?.length ? { [key]: value } as Record<K, string[]> : {};
+}
+
+function listOption(value: unknown): string[] | undefined {
+  const raw = stringOption(value);
+  if (!raw) return undefined;
+  const items = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  return items.length ? items : undefined;
 }

@@ -246,6 +246,9 @@ export interface AgentConfig {
   storagePath: string;
   artifactDir: string;
   credentialsFile?: string;
+  seedUrls?: string[];
+  discoverLinks?: boolean;
+  runRequest?: RunRequest;
 }
 
 export interface RunSummary {
@@ -257,4 +260,68 @@ export interface RunSummary {
   routesQueued: number;
   actionsAttempted: number;
   findings: number;
+}
+
+export type RunRequestType = "full" | "recent_change" | "screen" | "flow" | "baseline" | "wiki_sync";
+
+export type RunActionPolicy = "read_only" | "sandbox_mutation" | "approval_required";
+
+export interface RunRequest {
+  type: RunRequestType;
+  tenant: string;
+  role: string;
+  requestedBy?: string;
+  slackChannel?: string;
+  slackThreadTs?: string;
+  prompt?: string;
+  seedUrls?: string[];
+  targetModules?: string[];
+  maxSteps?: number;
+  maxDepth?: number;
+  budgetUsd?: number;
+  actionPolicy: RunActionPolicy;
+  enableStagehand?: boolean;
+  baselineRunId?: string;
+  promoteBaseline?: boolean;
+}
+
+export interface ImpactPlan {
+  modules: string[];
+  routes: string[];
+  wikiCitations: Array<{
+    title: string;
+    url: string;
+    articleId?: string;
+  }>;
+  confidence: number;
+  missingInfo: string[];
+  runScope: "full" | "targeted" | "clarify";
+}
+
+export interface QaJob {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "cancelled";
+  request: RunRequest;
+  cloudRunExecutionId?: string;
+  startedAt?: string;
+  completedAt?: string;
+  reportUrls?: string[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BaselineComparison {
+  newFindings: Finding[];
+  knownFindings: Finding[];
+  resolvedFindings: Finding[];
+  routeCoverageDelta: {
+    added: string[];
+    removed: string[];
+    unchanged: string[];
+  };
+  screenFingerprintDelta: {
+    changed: string[];
+    unchanged: string[];
+  };
 }

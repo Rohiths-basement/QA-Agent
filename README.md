@@ -161,8 +161,114 @@ src/coverage/coverageEngine.ts      visited/unvisited route graph
 src/memory/sqliteMemory.ts          resumable app-state memory
 src/validator/validator.ts          bug detection and severity classification
 src/report/reporter.ts              JSON/HTML report generation
+src/cloud/*                         Cloud Run API, worker, Slack, impact, baselines
+scripts/deploy-gcp.sh               GCP deployment script
 test/*.test.ts                      unit coverage for core behavior
 ```
+
+## Cloud Architecture
+
+The cloud version keeps the same QA engine and wraps it with a Slack/GCP control plane:
+
+```mermaid
+flowchart TD
+  Slack["Slack slash command / mention / DM"] --> Api["qa-api Cloud Run service"]
+  Api --> Intent["Intent router"]
+  Intent --> Impact["Impact analyzer"]
+  Impact --> JobStore["Cloud SQL Postgres qa_jobs"]
+  Api --> Launcher["Cloud Run Jobs API"]
+  Launcher --> Worker["qa-worker Cloud Run Job"]
+  Worker --> Engine["runQaAgent(request)"]
+  Engine --> Playwright["Playwright Chromium"]
+  Engine -. optional .-> Stagehand["Stagehand observe/act"]
+  Engine --> Unified["Unified app"]
+  Engine --> OpenAI["OpenAI vector store retrieval"]
+  Engine --> OpenRouter["OpenRouter oracle model"]
+  Engine --> SQLite["Per-run SQLite memory"]
+  Engine --> Artifacts["screenshots / traces / DOM / reports"]
+  Artifacts --> GCS["GCS artifact bucket"]
+  Worker --> JobStore
+  Worker --> SlackDigest["Slack completion digest"]
+```
+
+Cloud components:
+
+- `qa-api`: Cloud Run HTTP service for Slack slash commands, events, status, report lookup, and approvals.
+- `qa-worker`: Cloud Run Job for long browser runs. The API launches it asynchronously with a serialized `RunRequest`.
+- Cloud SQL Postgres: durable job status and report URL registry.
+- GCS: report, screenshot, trace, and DOM artifacts.
+- Secret Manager: Slack secrets, Unified credentials, OpenAI key, OpenRouter key, vector store id, and database URL.
+- Cloud Logging/Monitoring: runtime logs, Cloud Build logs, and worker failure traces.
+
+Slack commands:
+
+```text
+/qa full [tenant] [role] [budget]
+/qa recent <natural-language change description>
+/qa screen <url-or-description>
+/qa flow <flow description>
+/qa status <jobId>
+/qa report <jobId>
+/qa approve <jobId/actionId>
+```
+
+Targeted Slack runs default to `read_only`. Full/baseline runs allow only sandbox mutation behavior through the existing safety policy. Destructive, tenant-wide, invite, billing, and external notification actions remain approval-gated or blocked.
+
+## GCP Deployment
+
+Prerequisites:
+
+- `gcloud` is authenticated and has a selected project.
+- Billing is enabled on the project.
+- Docker/Cloud Build is available through GCP.
+- Optional but recommended: add Slack app secrets to `.env.local` before deploy.
+
+Deploy:
+
+```bash
+npm run build
+npm test
+npm run deploy:gcp
+```
+
+The deploy script will:
+
+1. Enable required GCP APIs.
+2. Create an Artifact Registry repo.
+3. Create a GCS artifact bucket.
+4. Create or reuse a small Cloud SQL Postgres instance by default.
+5. Copy local secrets from `.env.local` into Secret Manager.
+6. Build the container with Cloud Build.
+7. Deploy `qa-worker` as a Cloud Run Job.
+8. Deploy `qa-api` as a public Cloud Run service for Slack ingress.
+
+Useful deployment overrides:
+
+```bash
+PROJECT=agents-rohith REGION=us-central1 npm run deploy:gcp
+CREATE_CLOUD_SQL=0 DATABASE_URL=... npm run deploy:gcp
+QA_FULL_RUN_MAX_STEPS=500 QA_TARGETED_RUN_MAX_STEPS=60 npm run deploy:gcp
+```
+
+After deployment, configure Slack:
+
+- Slash command request URL: `<qa-api-url>/slack/commands`
+- Events request URL: `<qa-api-url>/slack/events`
+- Required Slack secrets in Secret Manager: `qa-slack-signing-secret`, `qa-slack-bot-token`
+
+Without Slack secrets, `/health` works and the service is deployed, but Slack endpoints return a clear configuration error.
+
+## Cloud Environment Variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GCP_PROJECT` / `CLOUD_RUN_PROJECT` | Cloud | Project used by `qa-api` to launch `qa-worker`. |
+| `GCP_REGION` / `CLOUD_RUN_REGION` | Cloud | Cloud Run region. Defaults to `us-central1`. |
+| `QA_WORKER_JOB_NAME` | Cloud | Cloud Run Job name. Defaults to `qa-worker`. |
+| `QA_GCS_BUCKET` | Cloud | Bucket where worker artifacts are uploaded. |
+| `DATABASE_URL` | Cloud recommended | Postgres URL for job state. The deploy script stores this in Secret Manager. |
+| `SLACK_SIGNING_SECRET` | Slack | Verifies slash command and Events API requests. |
+| `SLACK_BOT_TOKEN` | Slack | Posts async job updates and report links to Slack threads. |
 
 ## Setup
 
@@ -445,7 +551,7 @@ npm run build
 npm test
 ```
 
-The current test suite covers local KB retrieval, page classification, route key stability, scoped URL filtering, safe-action policy decisions, and SQLite route memory.
+The current test suite covers local KB retrieval, page classification, route key stability, scoped URL filtering, safe-action policy decisions, SQLite route memory, Slack command parsing/signature verification, impact planning, baseline comparison, and knowledge registry chunking.
 
 ## Troubleshooting
 
