@@ -4,6 +4,7 @@ import { seedUrlsForImpact } from "../cloud/impactAnalyzer.js";
 import { envString } from "../cloud/env.js";
 import { CodeGraphStore } from "../codegraph/codeGraphStore.js";
 import { GitHubAppClient, githubConfigured, parseGitHubPrUrl } from "./githubApp.js";
+import { pullRequestDiffViaSsh, sshGitConfigured } from "./sshGit.js";
 
 const MODULE_ROUTE_HINTS: Record<string, string[]> = {
   CAD: ["/cad", "/cad/map", "/dispatch"],
@@ -33,36 +34,17 @@ export async function analyzePullRequestImpact(input: PrImpactRequest): Promise<
     prUrl: input.prUrl
   }).budgetProfile;
 
-  if (!githubConfigured()) {
-    const modules = modulesFromPath(`${ref.repo} ${ref.url}`);
-    return {
-      prUrl: ref.url,
-      owner: ref.owner,
-      repo: ref.repo,
-      number: ref.number,
-      title: `PR #${ref.number}`,
-      filesChanged: [],
-      modules,
-      routes: routeHintsForModules(modules),
-      confidence: modules.length ? 0.45 : 0.2,
-      summary: "GitHub App credentials are not configured, so impact was inferred only from the PR URL/repo name.",
-      ...(budgetProfile ? { budgetProfile } : {})
-    };
-  }
+  const pullData = githubConfigured()
+    ? await pullDataViaApi(ref).catch(async () => pullDataViaSshOrUrlOnly(ref))
+    : await pullDataViaSshOrUrlOnly(ref);
 
-  const github = new GitHubAppClient();
-  const [pr, files] = await Promise.all([
-    github.request<GitHubPullRequest>(`/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`),
-    listChangedFiles(github, ref.owner, ref.repo, ref.number)
-  ]);
-
-  const changedPaths = files.map((file) => file.filename);
-  const patchText = files.map((file) => `${file.filename}\n${file.patch ?? ""}`).join("\n\n").slice(0, 20_000);
-  const graphHints = await searchCodeGraph(changedPaths, `${pr.title}\n${pr.body ?? ""}\n${patchText}`);
+  const changedPaths = pullData.filesChanged;
+  const patchText = pullData.patchText.slice(0, 20_000);
+  const graphHints = await searchCodeGraph(changedPaths, `${pullData.title}\n${pullData.body ?? ""}\n${patchText}`);
   const modules = unique([
     ...modulesFromPath(ref.repo),
     ...changedPaths.flatMap((filePath) => modulesFromPath(filePath)),
-    ...modulesFromPath(`${pr.title} ${pr.body ?? ""}`),
+    ...modulesFromPath(`${pullData.title} ${pullData.body ?? ""}`),
     ...graphHints.flatMap((hint) => hint.modules ?? [])
   ]);
   const routes = unique([
@@ -77,12 +59,12 @@ export async function analyzePullRequestImpact(input: PrImpactRequest): Promise<
     owner: ref.owner,
     repo: ref.repo,
     number: ref.number,
-    title: pr.title,
+    title: pullData.title,
     filesChanged: changedPaths,
     modules,
     routes,
     confidence,
-    summary: summaryForPr(pr, changedPaths, modules, routes, graphHints.length),
+    summary: summaryForPr({ title: pullData.title }, changedPaths, modules, routes, graphHints.length),
     ...(budgetProfile ? { budgetProfile } : {})
   };
 }
@@ -127,6 +109,36 @@ async function listChangedFiles(
     if (batch.length < 100) break;
   }
   return files;
+}
+
+async function pullDataViaApi(ref: ReturnType<typeof parseGitHubPrUrl>): Promise<PullData> {
+  const github = new GitHubAppClient();
+  const [pr, files] = await Promise.all([
+    github.request<GitHubPullRequest>(`/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`),
+    listChangedFiles(github, ref.owner, ref.repo, ref.number)
+  ]);
+  return {
+    title: pr.title,
+    ...(pr.body ? { body: pr.body } : {}),
+    filesChanged: files.map((file) => file.filename),
+    patchText: files.map((file) => `${file.filename}\n${file.patch ?? ""}`).join("\n\n")
+  };
+}
+
+async function pullDataViaSshOrUrlOnly(ref: ReturnType<typeof parseGitHubPrUrl>): Promise<PullData> {
+  if (sshGitConfigured()) {
+    const diff = await pullRequestDiffViaSsh({
+      owner: ref.owner,
+      repo: ref.repo,
+      number: ref.number
+    }).catch(() => undefined);
+    if (diff) return diff;
+  }
+  return {
+    title: `PR #${ref.number}`,
+    filesChanged: [],
+    patchText: ""
+  };
 }
 
 async function searchCodeGraph(paths: string[], context: string) {
@@ -215,4 +227,11 @@ interface GitHubPullRequest {
 interface GitHubPullFile {
   filename: string;
   patch?: string;
+}
+
+interface PullData {
+  title: string;
+  body?: string;
+  filesChanged: string[];
+  patchText: string;
 }

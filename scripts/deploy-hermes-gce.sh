@@ -7,10 +7,36 @@ ZONE="${ZONE:-us-central1-a}"
 VM_NAME="${VM_NAME:-qa-hermes-gateway}"
 SERVICE_NAME="${SERVICE_NAME:-qa-api}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-2}"
+HERMES_MODEL="${HERMES_MODEL:-openai/gpt-5.1-chat}"
+HERMES_AUX_MODEL="${HERMES_AUX_MODEL:-google/gemini-2.5-flash}"
 
 if [[ -z "${PROJECT}" ]]; then
   echo "PROJECT is required. Set PROJECT or run gcloud config set project <id>." >&2
   exit 1
+fi
+
+load_env_file() {
+  local file="$1"
+  while IFS='=' read -r key value || [[ -n "${key}" ]]; do
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    if [[ -z "${key}" || "${key}" == \#* || ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value%$'\r'}"
+    if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    export "${key}=${value}"
+  done < "${file}"
+}
+
+if [[ -f ".env.local" ]]; then
+  load_env_file ".env.local"
 fi
 
 QA_API_URL="${QA_API_URL:-$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --project "${PROJECT}" --format='value(status.url)' 2>/dev/null || true)}"
@@ -43,6 +69,8 @@ set -euo pipefail
 PROJECT_ID="$(curl -fsH 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/project/project-id)"
 QA_API_URL="__QA_API_URL__"
 SLACK_HOME_CHANNEL="__SLACK_HOME_CHANNEL__"
+HERMES_MODEL="__HERMES_MODEL__"
+HERMES_AUX_MODEL="__HERMES_AUX_MODEL__"
 
 secret() {
   gcloud secrets versions access latest --secret="$1" --project="${PROJECT_ID}" 2>/dev/null || true
@@ -58,8 +86,48 @@ fi
 install -d -o hermes -g hermes /home/hermes/.hermes
 
 sudo -u hermes bash -lc 'if ! command -v hermes >/dev/null 2>&1; then curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash; fi'
+sudo -u hermes bash -lc 'cd /home/hermes/.hermes/hermes-agent && /home/hermes/.local/bin/uv pip install --python venv/bin/python -e ".[slack]"'
 
 cat > /home/hermes/.hermes/config.yaml <<CONFIG
+model:
+  provider: "openrouter"
+  default: "${HERMES_MODEL}"
+
+provider_routing:
+  sort: "price"
+
+fallback_model:
+  provider: "openrouter"
+  model: "${HERMES_AUX_MODEL}"
+
+auxiliary:
+  vision:
+    provider: "openrouter"
+    model: "${HERMES_AUX_MODEL}"
+  web_extract:
+    provider: "openrouter"
+    model: "${HERMES_AUX_MODEL}"
+  session_search:
+    provider: "openrouter"
+    model: "${HERMES_AUX_MODEL}"
+  title_generation:
+    provider: "openrouter"
+    model: "${HERMES_AUX_MODEL}"
+  compression:
+    provider: "openrouter"
+    model: "${HERMES_AUX_MODEL}"
+
+slack:
+  require_mention: true
+  strict_mention: false
+
+platforms:
+  slack:
+    reply_to_mode: "first"
+    extra:
+      reply_in_thread: true
+      reply_broadcast: false
+
 mcp_servers:
   unified_qa:
     url: "${QA_API_URL}/mcp"
@@ -85,16 +153,43 @@ CONFIG
 chown hermes:hermes /home/hermes/.hermes/config.yaml
 chmod 600 /home/hermes/.hermes/config.yaml
 
+cat > /home/hermes/.hermes/SOUL.md <<'SOUL'
+# Unified Hermes QA Agent
+
+You are the conversational QA teammate for Unified applications. Your job is to help operators ask for QA work naturally in Slack, plan the safest useful run, and call the Unified QA MCP tools.
+
+Default behavior:
+- Ask one clarifying question when a request is ambiguous.
+- Prefer read-only and targeted QA unless the user asks for full coverage or approves sandbox mutations.
+- When a user gives a PR link, call the PR impact tools first, then run only the impacted scope when confidence is high.
+- When a user asks what is on screen or asks you to click/type/navigate, use the live browser session tools.
+- Respect user-provided budgets. For tiny budgets, keep runs shallow and deterministic. For larger budgets, allow deeper validation and model-backed oracle reasoning.
+- Never claim a QA run is finished until the job status/report tool says it is finished.
+- Summaries should include job ID, scope, budget profile, key findings, report links, and any blocked/skipped work.
+
+Safety:
+- Destructive, tenant-wide, billing, invite, notification, and delete actions require explicit approval.
+- Sandbox mutations must use records tagged with qa_<runId> and must have a cleanup plan.
+- If you are unsure whether an action is safe, choose the safer option and ask for approval.
+SOUL
+chown hermes:hermes /home/hermes/.hermes/SOUL.md
+chmod 600 /home/hermes/.hermes/SOUL.md
+
 cat > /etc/hermes-qa.env <<ENV
 HERMES_HOME=/home/hermes/.hermes
 OPENROUTER_API_KEY=$(secret qa-openrouter-api-key)
 SLACK_BOT_TOKEN=$(secret qa-slack-bot-token)
 SLACK_APP_TOKEN=$(secret qa-slack-app-token)
+SLACK_ALLOWED_USERS=__SLACK_ALLOWED_USERS__
 SLACK_HOME_CHANNEL=${SLACK_HOME_CHANNEL}
 SLACK_DEFAULT_CHANNEL=${SLACK_HOME_CHANNEL}
 QA_API_URL=${QA_API_URL}
 ENV
 chmod 600 /etc/hermes-qa.env
+
+cp /etc/hermes-qa.env /home/hermes/.hermes/.env
+chown hermes:hermes /home/hermes/.hermes/.env
+chmod 600 /home/hermes/.hermes/.env
 
 cat > /etc/systemd/system/hermes-qa-gateway.service <<SERVICE
 [Unit]
@@ -120,6 +215,9 @@ STARTUP
 
 sed -i.bak "s#__QA_API_URL__#${QA_API_URL}#g" "${startup_script}"
 sed -i.bak "s#__SLACK_HOME_CHANNEL__#${SLACK_DEFAULT_CHANNEL:-C0B35S99GLV}#g" "${startup_script}"
+sed -i.bak "s#__SLACK_ALLOWED_USERS__#${SLACK_ALLOWED_USERS:-}#g" "${startup_script}"
+sed -i.bak "s#__HERMES_MODEL__#${HERMES_MODEL}#g" "${startup_script}"
+sed -i.bak "s#__HERMES_AUX_MODEL__#${HERMES_AUX_MODEL}#g" "${startup_script}"
 
 if gcloud compute instances describe "${VM_NAME}" --zone "${ZONE}" --project "${PROJECT}" >/dev/null 2>&1; then
   gcloud compute instances add-metadata "${VM_NAME}" \

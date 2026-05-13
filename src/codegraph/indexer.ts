@@ -2,9 +2,11 @@ import OpenAI from "openai";
 import { GitHubAppClient } from "../github/githubApp.js";
 import { envNumber, envString } from "../cloud/env.js";
 import { CodeGraphStore } from "./codeGraphStore.js";
+import { DEFAULT_UNIFIED_REPOS, cloneRepo, listRepoFiles, readRepoFile, sshGitConfigured, withSshGit } from "../github/sshGit.js";
 
 const DEFAULT_ORG = "Unified-Solutions-EMS";
 const MAX_FILE_BYTES = 140_000;
+const EMBEDDING_BATCH_SIZE = 32;
 const TEXT_EXTENSIONS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml",
   ".py", ".rb", ".go", ".java", ".kt", ".cs", ".php", ".css", ".scss", ".html",
@@ -24,6 +26,13 @@ export async function indexUnifiedCodebase(input: {
   embed?: boolean;
 } = {}): Promise<CodeIndexResult> {
   const org = input.org ?? envString("CODEGRAPH_ORG", DEFAULT_ORG) ?? DEFAULT_ORG;
+  if (sshGitConfigured() && envString("GITHUB_AUTH_MODE", "ssh") === "ssh") {
+    return indexUnifiedCodebaseViaSsh({
+      org,
+      ...(input.limitRepos ? { limitRepos: input.limitRepos } : {}),
+      ...(typeof input.embed === "boolean" ? { embed: input.embed } : {})
+    });
+  }
   const github = new GitHubAppClient();
   const store = new CodeGraphStore();
   await store.init();
@@ -33,6 +42,9 @@ export async function indexUnifiedCodebase(input: {
   let chunks = 0;
 
   for (const repo of selectedRepos) {
+    const pendingChunks: PendingChunk[] = [];
+    let repoFiles = 0;
+    let repoChunks = 0;
     await store.upsertRepo({
       owner: org,
       repo: repo.name,
@@ -42,14 +54,15 @@ export async function indexUnifiedCodebase(input: {
     });
     const tree = await github.request<GitTreeResponse>(`/repos/${org}/${repo.name}/git/trees/${repo.default_branch}?recursive=1`);
     const blobs = tree.tree.filter((item) => item.type === "blob" && item.path && item.sha && shouldIndexPath(item.path, item.size));
+    console.log(`[codegraph] indexing ${repo.name}: ${blobs.length} files`);
     for (const blob of blobs) {
       const text = await fetchTextBlob(github, org, repo.name, blob.sha);
       if (!text) continue;
       files += 1;
+      repoFiles += 1;
       const chunkTexts = chunkText(text);
       for (const chunkTextValue of chunkTexts) {
-        const embedding = input.embed === false ? undefined : await embedChunk(chunkTextValue).catch(() => undefined);
-        await store.upsertChunk({
+        pendingChunks.push({
           repo: repo.name,
           path: blob.path,
           sha: blob.sha,
@@ -57,15 +70,83 @@ export async function indexUnifiedCodebase(input: {
           text: chunkTextValue,
           symbols: extractSymbols(chunkTextValue),
           routes: extractRoutes(chunkTextValue),
-          modules: extractModules(repo.name, blob.path, chunkTextValue),
-          ...(embedding ? { embedding } : {})
+          modules: extractModules(repo.name, blob.path, chunkTextValue)
         });
-        chunks += 1;
+        if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
+          const flushed = await flushChunkBatch(store, pendingChunks, input.embed !== false);
+          chunks += flushed;
+          repoChunks += flushed;
+        }
       }
     }
+    const flushed = await flushChunkBatch(store, pendingChunks, input.embed !== false);
+    chunks += flushed;
+    repoChunks += flushed;
+    console.log(`[codegraph] indexed ${repo.name}: files=${repoFiles} chunks=${repoChunks}`);
   }
 
   return { org, repos: selectedRepos.length, files, chunks };
+}
+
+async function indexUnifiedCodebaseViaSsh(input: {
+  org: string;
+  limitRepos?: number;
+  embed?: boolean;
+}): Promise<CodeIndexResult> {
+  const store = new CodeGraphStore();
+  await store.init();
+  const repos = repoListFromEnv().slice(0, input.limitRepos ?? envNumber("CODEGRAPH_MAX_REPOS", 18));
+  let files = 0;
+  let chunks = 0;
+
+  await withSshGit(async (context) => {
+    const orgContext = { ...context, org: input.org };
+    for (const repoName of repos) {
+      const repo = await cloneRepo(orgContext, repoName);
+      const pendingChunks: PendingChunk[] = [];
+      let indexedFiles = 0;
+      let indexedChunks = 0;
+      await store.upsertRepo({
+        owner: input.org,
+        repo: repo.name,
+        visibility: "PRIVATE",
+        ...(repo.defaultBranch ? { defaultBranch: repo.defaultBranch } : {}),
+        ...(repo.updatedAt ? { updatedAt: repo.updatedAt } : {})
+      });
+      const repoFiles = (await listRepoFiles(repo.localPath)).filter((filePath) => shouldIndexPath(filePath));
+      console.log(`[codegraph] indexing ${repo.name}: ${repoFiles.length} files`);
+      for (const filePath of repoFiles) {
+        const file = await readRepoFile(repo.localPath, filePath);
+        if (!file) continue;
+        files += 1;
+        indexedFiles += 1;
+        const chunkTexts = chunkText(file.text);
+        for (const chunkTextValue of chunkTexts) {
+          pendingChunks.push({
+            repo: repo.name,
+            path: filePath,
+            sha: file.sha,
+            language: languageForPath(filePath),
+            text: chunkTextValue,
+            symbols: extractSymbols(chunkTextValue),
+            routes: extractRoutes(chunkTextValue),
+            modules: extractModules(repo.name, filePath, chunkTextValue)
+          });
+          if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
+            const flushed = await flushChunkBatch(store, pendingChunks, input.embed !== false);
+            chunks += flushed;
+            indexedChunks += flushed;
+          }
+        }
+      }
+      const flushed = await flushChunkBatch(store, pendingChunks, input.embed !== false);
+      chunks += flushed;
+      indexedChunks += flushed;
+      console.log(`[codegraph] indexed ${repo.name}: files=${indexedFiles} chunks=${indexedChunks}`);
+    }
+  });
+
+  return { org: input.org, repos: repos.length, files, chunks };
 }
 
 async function listRepos(github: GitHubAppClient, org: string): Promise<GitRepo[]> {
@@ -86,14 +167,39 @@ async function fetchTextBlob(github: GitHubAppClient, org: string, repo: string,
   return text;
 }
 
-async function embedChunk(text: string): Promise<number[] | undefined> {
-  if (!process.env.OPENAI_API_KEY) return undefined;
+async function embedChunks(texts: string[]): Promise<Array<number[] | undefined>> {
+  if (!process.env.OPENAI_API_KEY || texts.length === 0) return [];
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const response = await client.embeddings.create({
     model: envString("CODEGRAPH_EMBEDDING_MODEL", "text-embedding-3-small") ?? "text-embedding-3-small",
-    input: text.slice(0, 7_500)
+    input: texts.map((text) => text.slice(0, 7_500))
   });
-  return response.data[0]?.embedding;
+  const byIndex = new Map<number, number[]>();
+  for (const item of response.data) {
+    byIndex.set(item.index, item.embedding);
+  }
+  return texts.map((_, index) => byIndex.get(index));
+}
+
+async function flushChunkBatch(store: CodeGraphStore, pendingChunks: PendingChunk[], embed: boolean): Promise<number> {
+  if (!pendingChunks.length) return 0;
+  const batch = pendingChunks.splice(0, pendingChunks.length);
+  const embeddings = embed ? await embedChunks(batch.map((chunk) => chunk.text)).catch(() => []) : [];
+  for (const [index, chunk] of batch.entries()) {
+    const embedding = embeddings[index];
+    await store.upsertChunk({
+      repo: chunk.repo,
+      path: chunk.path,
+      sha: chunk.sha,
+      language: chunk.language,
+      text: chunk.text,
+      symbols: chunk.symbols,
+      routes: chunk.routes,
+      modules: chunk.modules,
+      ...(embedding ? { embedding } : {})
+    });
+  }
+  return batch.length;
 }
 
 function shouldIndexPath(filePath: string, size?: number): boolean {
@@ -146,6 +252,12 @@ function unique<T>(items: T[]): T[] {
   return Array.from(new Set(items));
 }
 
+function repoListFromEnv(): string[] {
+  const configured = envString("CODEGRAPH_REPOS");
+  if (!configured) return DEFAULT_UNIFIED_REPOS;
+  return configured.split(",").map((repo) => repo.trim()).filter(Boolean);
+}
+
 interface GitRepo {
   name: string;
   default_branch: string;
@@ -166,4 +278,15 @@ interface GitTreeResponse {
 interface GitBlobResponse {
   content: string;
   encoding: string;
+}
+
+interface PendingChunk {
+  repo: string;
+  path: string;
+  sha: string;
+  language: string;
+  text: string;
+  symbols: string[];
+  routes: string[];
+  modules: string[];
 }

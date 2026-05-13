@@ -51,3 +51,4 @@ gcloud run jobs execute qa-code-indexer --region us-central1
 ```
 
 The Slack app must have a bot token, signing secret, and app-level `xapp-...` token stored in Secret Manager before the Hermes gateway can connect.
+Private GitHub access uses the local client SSH key in V1. The deploy script stores it in Secret Manager as `qa-github-ssh-private-key-base64`, and Cloud Run receives it as `GITHUB_SSH_PRIVATE_KEY_BASE64`.

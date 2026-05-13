@@ -1,4 +1,29 @@
-# GitHub App Setup For PR Impact QA
+# GitHub Access Setup For PR Impact QA
+
+## Current V1: SSH Key Auth
+
+The current deployed path uses the client SSH key configured on this machine. This avoids introducing a personal GitHub token and works for both code graph indexing and Slack PR-link impact analysis.
+
+Local `.env.local` values:
+
+```bash
+GITHUB_AUTH_MODE=ssh
+GITHUB_SSH_PRIVATE_KEY_PATH=~/.ssh/id_ed25519_client
+GITHUB_SSH_HOST=github.com
+GITHUB_SSH_ORG=Unified-Solutions-EMS
+CODEGRAPH_ORG=Unified-Solutions-EMS
+CODEGRAPH_MAX_REPOS=18
+```
+
+`npm run deploy:gcp` stores the key in Secret Manager as:
+
+```text
+qa-github-ssh-private-key-base64
+```
+
+Cloud Run receives it as `GITHUB_SSH_PRIVATE_KEY_BASE64`, materializes it inside each job container with `0600` permissions, and uses `GIT_SSH_COMMAND` for private clones/fetches.
+
+## Optional Future Path: GitHub App
 
 The production PR workflow should use a GitHub App installed on `Unified-Solutions-EMS`. The app gives the QA agent scoped, revocable access to private repositories without relying on a personal access token.
 

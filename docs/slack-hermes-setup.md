@@ -61,6 +61,8 @@ That VM installer:
 - Installs Hermes Agent.
 - Starts a `hermes-qa-gateway` systemd service.
 - Loads Slack/OpenRouter/internal QA tokens from Secret Manager.
+- Writes `~/.hermes/.env`, `~/.hermes/config.yaml`, and a QA-specific `SOUL.md`.
+- Sets the main Hermes model to `HERMES_MODEL` and auxiliary tasks to `HERMES_AUX_MODEL`.
 - Adds this repo's MCP endpoint to Hermes:
 
 ```yaml
@@ -80,3 +82,5 @@ gcloud compute ssh qa-hermes-gateway --zone us-central1-a --command 'sudo journa
 ```
 
 If Hermes does not respond in Slack, check that the app-level token starts with `xapp-`, has `connections:write`, the bot was reinstalled after adding scopes, and the bot was invited to the channel.
+
+For channel conversations, start with an explicit mention. In DMs, Hermes should answer directly. If the gateway reports unauthorized users, set `SLACK_ALLOWED_USERS` to comma-separated Slack member IDs and redeploy the Hermes VM.

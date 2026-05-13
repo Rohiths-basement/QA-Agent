@@ -248,15 +248,22 @@ MCP and live-browser endpoints are protected by `QA_INTERNAL_TOKEN`/`QA_MCP_TOKE
 
 ## PR Impact And Code Graph
 
-The PR workflow uses a GitHub App, not a personal token. The app credentials are stored in Secret Manager:
+The current V1 production path uses the client SSH key for private repository access. Locally, set:
 
 ```text
-qa-github-app-id
-qa-github-app-installation-id
-qa-github-app-private-key-base64
+GITHUB_AUTH_MODE=ssh
+GITHUB_SSH_PRIVATE_KEY_PATH=~/.ssh/id_ed25519_client
+GITHUB_SSH_HOST=github.com
+GITHUB_SSH_ORG=Unified-Solutions-EMS
 ```
 
-For local/dev testing before the GitHub App is installed, `GITHUB_TOKEN` is supported as a temporary fallback. Production should use the GitHub App so access can be scoped and rotated independently.
+`scripts/deploy-gcp.sh` base64-encodes that key into Secret Manager as:
+
+```text
+qa-github-ssh-private-key-base64
+```
+
+The Cloud Run code indexer and PR analyzer receive it as `GITHUB_SSH_PRIVATE_KEY_BASE64`. GitHub App credentials are still supported as a future/alternate path (`qa-github-app-id`, `qa-github-app-installation-id`, `qa-github-app-private-key-base64`), and `GITHUB_TOKEN` remains a temporary dev fallback.
 
 The code graph indexer scans all currently visible repos in `Unified-Solutions-EMS` by default (`CODEGRAPH_MAX_REPOS=18`), chunks text files, extracts symbols/routes/modules, stores records in Cloud SQL Postgres, and adds `pgvector` embeddings when `OPENAI_API_KEY` is available.
 
